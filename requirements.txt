@@ -1,0 +1,11 @@
+# Core: the haunting itself
+sentry-sdk>=2.40,<3      # crash tracing + telemetry for failed commands and the daemon
+rich>=13.7               # blood-red / ghostly-cyan terminal rendering
+psutil>=5.9              # ectoplasm (CPU / RAM) leak detector
+httpx>=0.27              # local Ollama (Gemma 2) API calls
+
+# Optional: Backboard ghost memory (only used when BACKBOARD_API_KEY is set)
+backboard-sdk>=1.5
+
+# Development
+pytest>=7
