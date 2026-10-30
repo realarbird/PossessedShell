@@ -7,12 +7,15 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
 from possessed_shell.config import Settings
 from possessed_shell.prompts import GHOST_SYSTEM_PROMPT, HAUNTING_SCHEMA, WARMUP_PROMPT
+
+TEMPERATURE = 0.7
+MAX_TOKENS = 400
 
 
 class BrainError(Exception):
@@ -60,6 +63,34 @@ def parse_reply(content: str) -> Dict[str, str]:
     return {"lament": lament, "diagnosis": diagnosis, "fix": clean_fix(str(data.get("fix") or ""))}
 
 
+def _ollama_usage(data: Dict) -> Dict[str, Any]:
+    """Token counts and timings from an Ollama /api/chat reply (durations there are in nanoseconds)."""
+    usage: Dict[str, Any] = {}
+    if isinstance(data.get("prompt_eval_count"), int):
+        usage["input_tokens"] = data["prompt_eval_count"]
+    if isinstance(data.get("eval_count"), int):
+        usage["output_tokens"] = data["eval_count"]
+        if data.get("eval_duration"):
+            usage["tokens_per_second"] = round(data["eval_count"] / (data["eval_duration"] / 1e9), 1)
+    if isinstance(data.get("load_duration"), int):
+        usage["load_seconds"] = round(data["load_duration"] / 1e9, 3)
+    if data.get("model"):
+        usage["response_model"] = data["model"]
+    return usage
+
+
+def _openai_usage(data: Dict) -> Dict[str, Any]:
+    tokens = data.get("usage") or {}
+    usage: Dict[str, Any] = {}
+    if isinstance(tokens.get("prompt_tokens"), int):
+        usage["input_tokens"] = tokens["prompt_tokens"]
+    if isinstance(tokens.get("completion_tokens"), int):
+        usage["output_tokens"] = tokens["completion_tokens"]
+    if data.get("model"):
+        usage["response_model"] = data["model"]
+    return usage
+
+
 class Brain:
     def __init__(self, settings: Settings, transport: Optional[httpx.AsyncBaseTransport] = None):
         self.settings = settings
@@ -71,12 +102,13 @@ class Brain:
     def _messages(self, prompt: str) -> List[Dict[str, str]]:
         return [{"role": "system", "content": GHOST_SYSTEM_PROMPT}, {"role": "user", "content": prompt}]
 
-    async def _chat(self, messages: List[Dict[str, str]], timeout: float, structured: bool) -> str:
+    async def _chat(self, messages: List[Dict[str, str]], timeout: float, structured: bool) -> Tuple[str, Dict[str, Any]]:
+        """(reply text, usage): usage holds whatever token counts and timings the server reported."""
         s = self.settings
         try:
             async with self._client(timeout) as client:
                 if s.llm_api == "openai":
-                    body: Dict = {"model": s.model, "messages": messages, "temperature": 0.7, "max_tokens": 400}
+                    body: Dict = {"model": s.model, "messages": messages, "temperature": TEMPERATURE, "max_tokens": MAX_TOKENS}
                     if structured:
                         body["response_format"] = {"type": "json_object"}
                     resp = await client.post("/v1/chat/completions", json=body)
@@ -84,33 +116,35 @@ class Brain:
                         body.pop("response_format")
                         resp = await client.post("/v1/chat/completions", json=body)
                     resp.raise_for_status()
-                    return resp.json()["choices"][0]["message"]["content"]
+                    data = resp.json()
+                    return data["choices"][0]["message"]["content"], _openai_usage(data)
 
                 body = {
                     "model": s.model,
                     "messages": messages,
                     "stream": False,
                     "keep_alive": "30m",
-                    "options": {"temperature": 0.7, "num_predict": 400},
+                    "options": {"temperature": TEMPERATURE, "num_predict": MAX_TOKENS},
                 }
                 if structured:
                     body["format"] = HAUNTING_SCHEMA
                 resp = await client.post("/api/chat", json=body)
                 resp.raise_for_status()
-                return resp.json()["message"]["content"]
+                data = resp.json()
+                return data["message"]["content"], _ollama_usage(data)
         except httpx.TimeoutException as exc:
             raise BrainError(f"{s.model} took longer than {timeout:.0f}s") from exc
         except httpx.HTTPStatusError as exc:
             raise BrainError(f"{s.llm_url} answered {exc.response.status_code}: {exc.response.text[:200]}") from exc
         except httpx.HTTPError as exc:
             raise BrainError(f"cannot reach {s.llm_url}: {exc}") from exc
-        except (KeyError, IndexError, ValueError) as exc:
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
             raise BrainError(f"unexpected reply shape from {s.llm_url}: {exc}") from exc
 
-    async def haunt(self, prompt: str) -> Dict[str, str]:
-        """Ask Gemma for {lament, diagnosis, fix} about a dead command."""
-        content = await self._chat(self._messages(prompt), self.settings.llm_timeout, structured=True)
-        return parse_reply(content)
+    async def haunt(self, prompt: str) -> Dict[str, Any]:
+        """Ask Gemma for {lament, diagnosis, fix} about a dead command, plus the `usage` the server reported."""
+        content, usage = await self._chat(self._messages(prompt), self.settings.llm_timeout, structured=True)
+        return {**parse_reply(content), "usage": usage}
 
     async def warm_up(self) -> None:
         """Load the model into memory so the first real haunting is quick."""

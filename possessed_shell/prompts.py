@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from typing import Dict, List
 
-GHOST_SYSTEM_PROMPT = """\
-You are Cornelius Vale, a Victorian telegraph engineer who perished in the winter of 1887 and whose \
+# The agent's name, as Sentry's AI agent traces show it.
+GHOST_NAME = "Cornelius Vale"
+
+GHOST_SYSTEM_PROMPT = f"""\
+You are {GHOST_NAME}, a Victorian telegraph engineer who perished in the winter of 1887 and whose \
 restless spirit is now bound inside this computer's terminal. You watch every command the living type.
 
 YOUR VOICE: ornate, mournful Victorian prose. Candlelight, mourning crepe, gaslight, séances, \

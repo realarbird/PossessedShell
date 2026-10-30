@@ -155,13 +155,27 @@ def render_haunting(console: Console, haunting: Haunting, shell: str = "") -> No
         }.get(shell)
         if hint:
             console.print(Text(f"  {hint}", style=ASH))
-    footer = [("  ", ""), ("whispered by " + haunting.source if haunting.source != "remedy"
-                           else "read from the old grimoire (Gemma was silent)", f"dim {ASH}")]
+    source = ("whispered by " + haunting.source if haunting.source != "remedy"
+              else "read from the old grimoire (Gemma was silent)")
+    if haunting.latency:
+        source += f" in {haunting.latency:.1f}s"
+    if haunting.tokens:
+        source += f", {haunting.tokens} tokens"
+    extras = []
     if haunting.past_sins:
-        footer.append((f"  ·  {len(haunting.past_sins)} past sin(s) remembered", f"dim {CANDLE}"))
+        extras.append((f"{len(haunting.past_sins)} past sin(s) remembered", f"dim {CANDLE}"))
     if haunting.sentry_event_id:
-        footer.append((f"  ·  sentry {haunting.sentry_event_id[:12]}", f"dim {ASH}"))
-    console.print(Text.assemble(*footer))
+        extras.append((f"sentry {haunting.sentry_event_id[:12]}", f"dim {ASH}"))
+    # Wrap between the footer's pieces, never inside one.
+    footer = Text.assemble(("  ", ""), (source, f"dim {ASH}"))
+    for extra, style in extras:
+        piece = Text.assemble(("  ·  ", f"dim {ASH}"), (extra, style))
+        if footer.cell_len + piece.cell_len > console.width:
+            console.print(footer)
+            footer = Text.assemble(("  ", ""), (extra, style))
+        else:
+            footer.append_text(piece)
+    console.print(footer)
     console.print()
 
 

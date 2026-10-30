@@ -45,10 +45,18 @@ def test_ollama_request_shape(settings):
     def handler(request):
         seen["path"] = request.url.path
         seen["body"] = json.loads(request.content)
-        return httpx.Response(200, json={"message": {"role": "assistant", "content": json.dumps(REPLY)}})
+        return httpx.Response(200, json={
+            "model": "gemma2:2b", "message": {"role": "assistant", "content": json.dumps(REPLY)}, "done": True,
+            "total_duration": 2_400_000_000, "load_duration": 300_000_000,
+            "prompt_eval_count": 512, "prompt_eval_duration": 900_000_000,
+            "eval_count": 120, "eval_duration": 1_500_000_000,
+        })
 
     result = asyncio.run(_brain(settings, handler).haunt("COMMAND: ls"))
+    usage = result.pop("usage")
     assert result == REPLY
+    assert usage == {"input_tokens": 512, "output_tokens": 120, "tokens_per_second": 80.0, "load_seconds": 0.3,
+                     "response_model": "gemma2:2b"}
     body = seen["body"]
     assert seen["path"] == "/api/chat"
     assert body["model"] == "gemma2:2b"
@@ -63,9 +71,18 @@ def test_openai_compatible_server(settings):
 
     def handler(request):
         assert request.url.path == "/v1/chat/completions"
-        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(REPLY)}}]})
+        return httpx.Response(200, json={"model": "gemma-2-2b-it", "choices": [{"message": {"content": json.dumps(REPLY)}}],
+                                         "usage": {"prompt_tokens": 300, "completion_tokens": 90, "total_tokens": 390}})
 
-    assert asyncio.run(_brain(settings, handler).haunt("x")) == REPLY
+    result = asyncio.run(_brain(settings, handler).haunt("x"))
+    assert result.pop("usage") == {"input_tokens": 300, "output_tokens": 90, "response_model": "gemma-2-2b-it"}
+    assert result == REPLY
+
+
+def test_missing_usage_is_left_out_not_guessed(settings):
+    reply = {"message": {"content": json.dumps(REPLY)}}
+    result = asyncio.run(_brain(settings, lambda r: httpx.Response(200, json=reply)).haunt("x"))
+    assert result["usage"] == {}
 
 
 def test_server_errors_become_brain_errors(settings):

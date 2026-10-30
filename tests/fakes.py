@@ -2,16 +2,17 @@ from possessed_shell.brain import BrainError
 
 
 class FakeBrain:
-    def __init__(self, reply=None, error=None):
+    def __init__(self, reply=None, error=None, usage=None):
         self.reply = reply or {"lament": "Alas, poor process.", "diagnosis": "It is dead.", "fix": "ls -la /"}
         self.error = error
+        self.usage = usage or {}
         self.prompts = []
 
     async def haunt(self, prompt):
         self.prompts.append(prompt)
         if self.error:
             raise BrainError(self.error)
-        return dict(self.reply)
+        return {**self.reply, "usage": dict(self.usage)}
 
     async def warm_up(self):
         pass

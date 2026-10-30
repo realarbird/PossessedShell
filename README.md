@@ -24,10 +24,10 @@
 │  python3 -m pip install ectoplasm  │
 ╰────────────────────────────────────╯
   The remedy waits on your next prompt. Enter to accept, Ctrl-U to refuse.
-  whispered by gemma2:2b
+  whispered by gemma2:2b in 1.9s, 212 tokens
 ```
 
-PossessedShell is an ambient CLI companion for zsh and bash, built for Hacktoberfest week 4. It does three things:
+PossessedShell is an ambient CLI companion for zsh and bash, built for the [DEV Hacktoberfest Open-Source AI Challenge, Week 4: Ghost in the Machine](https://dev.to/challenges/hacktoberfest-week4-2026-10-26). It does three things:
 
 - **The Failing Command Curse.** When a command exits non-zero, it captures the command, the stderr and the exit code. It traces them to **Sentry**, asks **Gemma 2** (running locally in **Ollama**) for a diagnosis, and shows a ghostly interruption. The exact fix command is then pre-typed on your next prompt in zsh, or placed in history in bash.
 - **The Forbidden Ritual Interceptor.** Destructive commands are stopped *before* they run, and the ghost asks whether you truly wish to summon such destruction. Covered: `rm -rf`, `git push --force`, `git reset --hard`, `chmod 777`, `DROP DATABASE`, `mkfs`, `dd of=/dev/…`, `curl | sh`, fork bombs and more.
@@ -43,7 +43,7 @@ It also has an optional ghost memory on **Backboard**. With an API key set, the 
  preexec   remember command, truncate stderr log   ┌─► Sentry: ShellCommandFailed event + stderr.txt,
  exec 2> >(tee …)   copy stderr to session log     │    transaction  shell.curse  ─┬ ghost.snapshot
  precmd    exit != 0 ─► possessed-shell curse ─────┤                               ├ ghost.memory.recall ─► Backboard (opt-in)
-                        (spinner, then typewriter) │                               └ ghost.llm ─► Ollama gemma2:2b (localhost)
+                        (spinner, then typewriter) │                               └ gen_ai.invoke_agent › gen_ai.chat ─► Ollama gemma2:2b (localhost)
            pre-fill fix ◄──── haunting JSON ◄──────┘    fallback: offline grimoire of heuristics if Gemma is silent
  accept-line / DEBUG trap ─► possessed-shell ritual ─► y/N on /dev/tty, exit 66 = banished ─► Sentry warning
  precmd    omen.json present? ─► possessed-shell omen ◄── ectoplasm monitor (psutil, every 5s)
@@ -61,6 +61,7 @@ It also has an optional ghost memory on **Backboard**. With an API key set, the 
 ```
 PossessedShell/
 ├── README.md
+├── LICENSE                    # MIT
 ├── requirements.txt           # pip install -r requirements.txt
 ├── pyproject.toml             # console script: possessed-shell
 ├── possessed_shell/
@@ -154,6 +155,28 @@ The prompt forbids inventing files, flags or packages the error doesn't imply, a
 
 The three banners in [`banners.py`](possessed_shell/banners.py) (wailing ghost, ritual skull with candles, ectoplasm blob) flicker in through glitch static before they settle. Text is spelled out typewriter-style in ghostly cyan, and warnings come in blood red.
 
+## Watching the ghost think (Sentry agent tracing)
+
+With `SENTRY_DSN` set, every curse becomes a trace. The Gemma call follows Sentry's AI agent span conventions, so it appears under **Insights → AI → Agents** as well as in the `curse <program>` transaction:
+
+```
+curse ls                          shell.curse           the transaction
+├─ system vital signs             ghost.snapshot        CPU, RAM, disk, hungriest process
+├─ backboard recall               ghost.memory.recall   how many past sins came back
+└─ invoke_agent Cornelius Vale    gen_ai.invoke_agent   outcome: gemma, or remedy (and why)
+   └─ chat gemma2:2b              gen_ai.chat           tokens, timings, prompt and reply
+```
+
+| on the `gen_ai.chat` span | what it tells you |
+|---|---|
+| span duration | how long Gemma took to answer |
+| `gen_ai.usage.input_tokens` / `output_tokens` / `total_tokens` | prompt and reply size: Ollama's `prompt_eval_count` and `eval_count` (or `usage` from a `/v1` server) |
+| `ollama.load_seconds` | time spent loading the model; a high value means a cold start, which the daemon's warm-up exists to avoid |
+| `ollama.tokens_per_second` | generation speed on your machine |
+| `gen_ai.system_instructions`, `gen_ai.request.messages`, `gen_ai.response.text` | exactly what Gemma was asked and what it answered, scrubbed by `redact.py` |
+
+The cost is $0, because inference is local. When Gemma times out or answers with something unusable, the `gen_ai.chat` span is marked as an error, and `gen_ai.invoke_agent` records `outcome: remedy` with the reason. A slow or broken model server stands out at a glance. The same latency and token count are printed in the haunting's footer.
+
 ## Configuration
 
 | Variable | Default | Meaning |
@@ -178,6 +201,7 @@ Daemon controls are `possessed-shell daemon start|stop|restart|status|run`. Use 
 ## Privacy and trade-offs
 
 - **The brain is local.** Commands and stderr go to Gemma on `localhost` only.
+- **What Sentry sees.** The `ShellCommandFailed` event carries the command, the stderr tail and the system state. The `gen_ai.chat` span carries the prompt Gemma saw (the same details) and its reply, plus token counts. All of it is scrubbed first.
 - **Sentry and Backboard are opt-in.** Before anything goes to either one, `redact.py` scrubs it. It removes passwords, tokens, API keys, AWS and GitHub keys, JWTs, private keys and credentials in URLs, through `before_send`/`before_send_transaction` for Sentry and before each memory write for Backboard. Backboard only ever receives a one-line summary per failure. Point `SENTRY_DSN` at a self-hosted Sentry to keep telemetry on your own network.
 - **stderr capture** works by sending the shell's stderr through `tee` into `~/.possessed/sessions/<pid>/stderr.log`, which is mode `0700` and truncated before each command. Because stderr is then a pipe and not a TTY, some tools drop colours or progress bars on stderr (`git` progress, for example). Set `POSSESSED_CAPTURE_STDERR=0` if that bothers you. The ghost still works, with less to go on.
 - **bash** uses `shopt -s extdebug`, so a `DEBUG` trap can veto a command. This also turns on function tracing, so the hook ignores anything that isn't a top-level command you typed. It chains any existing `DEBUG`/`EXIT` trap, but it must be sourced after other prompt tools (starship, etc.).
@@ -199,3 +223,21 @@ The end-to-end tests start real interactive shells with the hook loaded. They ch
 - omens appear at the next prompt.
 
 They run with Gemma unreachable, so the offline grimoire answers.
+
+## Credits
+
+- **[Gemma](https://ai.google.dev/gemma)** by Google is the open-weight model behind the ghost, used under the [Gemma Terms of Use](https://ai.google.dev/gemma/terms).
+- **[Ollama](https://github.com/ollama/ollama)** runs it locally.
+- **[rich](https://github.com/Textualize/rich)**, **[psutil](https://github.com/giampaolo/psutil)**, **[httpx](https://github.com/encode/httpx)**, **[sentry-python](https://github.com/getsentry/sentry-python)** and the [Backboard](https://backboard.io) SDK are used as libraries.
+- Prior art: **[thefuck](https://github.com/nvbn/thefuck)** also corrects the previous failed command, using rules where PossessedShell uses an LLM. No code from it is used here; the offline grimoire's rules are written from scratch.
+
+## Challenge notes
+
+- Built for [Week 4: Ghost in the Machine](https://dev.to/challenges/hacktoberfest-week4-2026-10-26), whose challenge window runs Oct 26–31, 2026.
+- Open-source AI is at its core: Gemma, an open-weight model, runs locally in Ollama. The grimoire is only a fallback.
+- Partner technology: Gemma; Sentry agent tracing (above); Backboard ghost memory.
+- Commits after the submission deadline (Oct 31, 2026, 11:59 PM PDT): none.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

@@ -59,6 +59,8 @@ class Haunting:
     sentry_event_id: Optional[str] = None
     command: str = ""
     exit_code: int = 0
+    latency: float = 0.0  # seconds Gemma took to answer (0 for the grimoire)
+    tokens: int = 0  # tokens Gemma generated, when the server says
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

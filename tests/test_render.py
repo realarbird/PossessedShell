@@ -24,13 +24,22 @@ def text(console):
 def test_animated_haunting(console):
     haunting = Haunting(lament="Alas, poor ls. " * 8, diagnosis="The path does not exist.", fix="ls -la /",
                         source="gemma2:2b", past_sins=["once"], sentry_event_id="abc123def4567890",
-                        command="ls /nope", exit_code=2, fix_warning="careful")
+                        command="ls /nope", exit_code=2, fix_warning="careful", latency=1.84, tokens=212)
     with render.summoning(console):
         pass
     render.render_haunting(console, haunting, shell="zsh")
     out = text(console)
     assert "HAS DIED" in out and "ls -la /" in out and "1 past sin" in out and "sentry abc123def456" in out
+    assert "whispered by gemma2:2b in 1.8s, 212 tokens" in out
     assert "\x1b[38;2;" in out  # blood red and ghostly cyan, in true colour
+
+
+def test_footer_wraps_between_pieces(console):
+    haunting = Haunting(lament="Alas.", diagnosis="Gone.", source="remedy", past_sins=["once", "twice"],
+                        sentry_event_id="abc123def4567890", command="ls /nope", exit_code=2)
+    render.render_haunting(console, haunting)
+    out = text(console)
+    assert "2 past sin(s) remembered" in out and "sentry abc123def456" in out
 
 
 def test_animated_ritual_and_omen(console):
