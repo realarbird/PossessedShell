@@ -51,6 +51,8 @@ _TYPOS = {"sl": "ls", "gti": "git", "got": "git", "gi": "git", "pyhton": "python
 
 
 def _install_command(pkg: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9._+-]+", pkg):
+        return ""
     if platform.system() == "Darwin":
         return f"brew install {pkg}"
     for manager, template in (("apt-get", "sudo apt-get install -y {}"), ("dnf", "sudo dnf install -y {}"),
@@ -61,6 +63,12 @@ def _install_command(pkg: str) -> str:
 
 
 def _replace_first(command: str, old: str, new: str) -> str:
+    """Replace the first standalone token occurrence of `old` with `new`, avoiding substring hits inside paths."""
+    if not old:
+        return command
+    pattern = re.compile(rf"(?<![\w./-]){re.escape(old)}(?![\w.-])")
+    if pattern.search(command):
+        return pattern.sub(lambda _: new, command, count=1)
     idx = command.find(old)
     return command if idx < 0 else command[:idx] + new + command[idx + len(old):]
 
@@ -79,14 +87,20 @@ Rule = Callable[[Failure], Optional[Tuple[str, str]]]  # -> (diagnosis, fix)
 
 
 def _command_not_found(f: Failure) -> Optional[Tuple[str, str]]:
+    if "bad interpreter:" in f.stderr:
+        return None
     m = (re.search(r"command not found: (\S+)", f.stderr)
          or re.search(r"(\S+): command not found", f.stderr)
-         or re.search(r"(\S+): not found", f.stderr))
+         or (re.search(r"(\S+): not found", f.stderr) if f.exit_code == 127 else None))
     if not m and f.exit_code != 127:
+        return None
+    if not m and ("No such file or directory" in f.stderr or "no such file or directory" in f.stderr):
         return None
     missing = m.group(1).rstrip(":") if m else f.name
     if missing.startswith(("bash:", "zsh:")):
         missing = f.name
+    if "/" in missing:
+        return None
     if missing in _TYPOS:
         return (f"`{missing}` is a typo for `{_TYPOS[missing]}`.", _replace_first(f.command, missing, _TYPOS[missing]))
     close = difflib.get_close_matches(missing, _executables_on_path(), n=1, cutoff=0.75)
@@ -170,6 +184,34 @@ def _npm_missing_script(f: Failure) -> Optional[Tuple[str, str]]:
     return ("package.json has no script by that name.", "npm run")
 
 
+def _node_missing_module(f: Failure) -> Optional[Tuple[str, str]]:
+    m = re.search(r"Cannot find (?:module|package) '([^']+)'", f.stderr)
+    if not m:
+        return None
+    mod = m.group(1)
+    if mod.startswith((".", "/")):
+        return (f"The local module `{mod}` could not be found.", "")
+    pkg = "/".join(mod.split("/")[:2]) if mod.startswith("@") else mod.split("/")[0]
+    if not re.fullmatch(r"@?[A-Za-z0-9._/-]+", pkg):
+        return None
+    return (f"The Node.js package `{pkg}` is not installed.", f"npm install {pkg}")
+
+
+def _git_identity(f: Failure) -> Optional[Tuple[str, str]]:
+    if "Author identity unknown" not in f.stderr and "Please tell me who you are" not in f.stderr:
+        return None
+    return ("Git does not have your author name and email configured yet.",
+            'git config --global user.email "<you@example.com>" && git config --global user.name "<Your Name>"')
+
+
+def _cargo_or_go_manifest(f: Failure) -> Optional[Tuple[str, str]]:
+    if "could not find `Cargo.toml`" in f.stderr:
+        return ("There is no Cargo.toml in this directory or any parent directory.", "cargo init")
+    if "go.mod file not found" in f.stderr:
+        return ("There is no go.mod in this directory or any parent directory.", "go mod init <module>")
+    return None
+
+
 def _permission(f: Failure) -> Optional[Tuple[str, str]]:
     if f.exit_code != 126 and "Permission denied" not in f.stderr and "EACCES" not in f.stderr:
         return None
@@ -223,7 +265,8 @@ def _usage(f: Failure) -> Optional[Tuple[str, str]]:
 
 
 RULES: List[Rule] = [
-    _git_upstream, _git_similar, _git_not_repo, _git_rejected, _module_not_found, _externally_managed,
+    _git_upstream, _git_similar, _git_not_repo, _git_rejected, _git_identity,
+    _module_not_found, _externally_managed, _node_missing_module, _cargo_or_go_manifest,
     _command_not_found, _port_in_use, _dns, _docker_daemon, _npm_missing_script, _oom, _permission,
     _no_such_file, _usage,
 ]

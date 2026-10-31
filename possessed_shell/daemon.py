@@ -97,6 +97,10 @@ class Daemon:
             pass  # the client was banished (Ctrl-C) before we answered
         finally:
             writer.close()
+            try:
+                await writer.wait_closed()
+            except (ConnectionError, OSError):
+                pass
 
     # ---- background work --------------------------------------------------------------------
 
@@ -119,8 +123,13 @@ class Daemon:
             if not psutil.pid_exists(int(session.name)):
                 _bury(session)
                 continue
-            (session / "omen.json").write_text(json.dumps(omen))
-            delivered += 1
+            try:
+                tmp = session / ".omen.json.tmp"
+                tmp.write_text(json.dumps(omen))
+                os.replace(tmp, session / "omen.json")
+                delivered += 1
+            except OSError:
+                continue
         return delivered
 
     async def monitor_loop(self) -> None:
@@ -204,14 +213,18 @@ def run(settings: Settings) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
     # Several shells may wake the ghost at the same moment; only one may haunt.
-    lock = open(settings.home / "daemon.lock", "w")
+    lock_fd = os.open(str(settings.home / "daemon.lock"), os.O_WRONLY | os.O_CREAT, 0o600)
+    lock = os.fdopen(lock_fd, "w")
     try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        log.info("another ghost already haunts %s", settings.home)
-        return
-    for session in settings.sessions_dir.iterdir():
-        if session.is_dir() and session.name.isdigit() and not psutil.pid_exists(int(session.name)):
-            _bury(session)
-    telemetry.init(settings, "daemon")
-    asyncio.run(Daemon(settings).serve())
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            log.info("another ghost already haunts %s", settings.home)
+            return
+        for session in settings.sessions_dir.iterdir():
+            if session.is_dir() and session.name.isdigit() and not psutil.pid_exists(int(session.name)):
+                _bury(session)
+        telemetry.init(settings, "daemon")
+        asyncio.run(Daemon(settings).serve())
+    finally:
+        lock.close()

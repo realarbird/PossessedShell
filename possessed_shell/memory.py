@@ -61,6 +61,10 @@ class GhostMemory:
     def _save_state(self, state: Dict[str, Any]) -> None:
         self.settings.ensure_home()
         self.settings.state_path.write_text(json.dumps(state, indent=2))
+        try:
+            os.chmod(self.settings.state_path, 0o600)
+        except OSError:
+            pass
 
     async def assistant_id(self) -> str:
         if self._assistant_id:

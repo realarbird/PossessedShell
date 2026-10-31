@@ -19,13 +19,21 @@ _PATTERNS = [
      r"\1\2" + MASK),
     # Authorization headers
     (re.compile(r"(?i)\b(bearer|basic|token)\s+[A-Za-z0-9._~+/=-]{8,}"), r"\1 " + MASK),
-    # credentials embedded in URLs: scheme://user:pass@host
-    (re.compile(r"([a-z][a-z0-9+.-]*://)([^/\s:@]+):([^/\s@]+)@", re.I), r"\1\2:" + MASK + "@"),
+    # credentials embedded in URLs: scheme://user:pass@host or scheme://:pass@host
+    (re.compile(r"([a-z][a-z0-9+.-]*://)([^/\s:@]*):([^/\s@]+)@", re.I), r"\1\2:" + MASK + "@"),
+    # curl -u user:pass / --user user:pass (skip -u scheme://... URIs such as redis-cli -u)
+    (re.compile(r"(\s(?:-u|--user)\s+[^/\s:@'\"]+:(?!//))(\"[^\"]*\"|'[^']*'|[^\s'\"]+)"), r"\1" + MASK),
     # well-known token shapes
     (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), MASK),  # AWS access key id
+    (re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"), MASK),  # Google API keys
     (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{30,}\b"), MASK),  # GitHub tokens
     (re.compile(r"\bgithub_pat_[A-Za-z0-9_]{30,}\b"), MASK),
     (re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"), MASK),  # OpenAI/Anthropic style secret keys
+    (re.compile(r"\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}\b"), MASK),  # Stripe style secret keys
+    (re.compile(r"\bhf_[A-Za-z0-9]{30,}\b"), MASK),  # Hugging Face tokens
+    (re.compile(r"\bnpm_[A-Za-z0-9]{30,}\b"), MASK),  # npm tokens
+    (re.compile(r"\bpypi-[A-Za-z0-9_-]{30,}\b"), MASK),  # PyPI tokens
+    (re.compile(r"\bsntry[su]_[A-Za-z0-9_=-]{30,}\b"), MASK),  # Sentry auth tokens
     (re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}\b"), MASK),  # Slack
     (re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"), MASK),  # JWT
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"), MASK),

@@ -14,7 +14,16 @@ def test_cli_flag_secrets():
 def test_tokens_and_urls():
     assert "ghp_" not in redact("ghp_" + "a" * 36)
     assert "AKIA" not in redact("aws key AKIAABCDEFGHIJKLMNOP")
+    assert "AIza" not in redact("key AIza" + "A" * 35)
+    assert "sk_live_" not in redact("stripe sk_live_" + "a" * 24)
+    assert "hf_" not in redact("hf_" + "a" * 34)
+    assert "npm_" not in redact("npm_" + "a" * 36)
+    assert "pypi-" not in redact("pypi-" + "a" * 36)
+    assert "sntrys_" not in redact("sntrys_" + "a" * 36)
     assert redact("git clone https://bob:s3cret@github.com/x/y") == f"git clone https://bob:{MASK}@github.com/x/y"
+    assert redact("redis-cli -u redis://:s3cret@localhost:6379/0") == f"redis-cli -u redis://:{MASK}@localhost:6379/0"
+    assert redact("curl -u bob:hunter2 https://example.com") == f"curl -u bob:{MASK} https://example.com"
+    assert redact("curl --user admin:'topsecret' https://example.com") == f"curl --user admin:{MASK} https://example.com"
     assert MASK in redact("curl -H 'Authorization: Bearer abcdefghijklmnop'")
 
 

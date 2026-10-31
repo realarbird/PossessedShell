@@ -14,8 +14,8 @@ from typing import Iterator, List, Optional
 
 SEVERITY_ORDER = {"grave": 1, "dire": 2, "apocalyptic": 3}
 
-# POSIX ERE run by the shell hook (`[[ ${cmd,,} =~ $re ]]` in bash, `${(L)BUFFER}` in zsh) against
-# the lower-cased command line. It must match every line `analyze()` flags; false positives only
+# POSIX ERE run by the shell hook (`shopt -s nocasematch; [[ $cmd =~ $re ]]` in bash, `${(L)BUFFER}` in zsh)
+# against the command line. It must match every line `analyze()` flags; false positives only
 # cost a Python start-up. tests/test_rituals.py checks this with a real bash.
 PREFILTER_ERE = (
     r"(^|[^[:alnum:]_.-])(rm|dd|shred|chmod|chown|dropdb)([[:space:]]|$)"
@@ -28,16 +28,31 @@ PREFILTER_ERE = (
     r"|find.*-delete"
     r"|:\(\)"
     r"|\|[[:space:]]*(sudo[[:space:]]+)?(ba|z|da)?sh([[:space:]]|$)"
-    r"|/dev/(sd|nvme|disk|hd)"
+    r"|/dev/(sd|nvme|r?disk|hd|x?vd)"
 )
 
 # Paths whose recursive deletion (or chmod) is the end of days rather than a mere misfortune.
 _SACRED_PATHS = {
-    "/", "/*", "~", "~/", "~/*", "$home", "${home}", "$home/", "*", ".", "./", "..", "../", ".*",
-    "/home", "/etc", "/usr", "/var", "/bin", "/boot", "/lib", "/opt", "/root", "/system", "/users",
+    "/", "/*", "~", "~/", "~/*", "$home", "${home}", "$home/", "$home/*", "${home}/", "${home}/*",
+    "*", ".", "./", "..", "../", ".*",
+    "/home", "/etc", "/usr", "/var", "/bin", "/sbin", "/boot", "/lib", "/opt", "/root",
+    "/system", "/users", "/applications", "/library", "/volumes", "/private", "/dev", "/proc", "/sys",
 }
 
 _PREFIX_COMMANDS = {"sudo", "doas", "command", "builtin", "exec", "nohup", "time", "nice", "env", "xargs", "caffeinate"}
+# Flags per wrapper that consume a separate argument token (e.g. `sudo -u root`, `nice -n 10`).
+# Boolean flags like `sudo -n` or `command -p` must NOT consume the program name that follows!
+_WRAPPER_ARG_FLAGS = {
+    "sudo": {"-u", "--user", "-g", "--group", "-C", "--close-from", "-D", "--chdir", "-p", "--prompt",
+             "-h", "--host", "-r", "--role", "-t", "--type", "-U", "--other-user"},
+    "doas": {"-u", "-C"},
+    "env": {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"},
+    "nice": {"-n", "--adjustment"},
+    "xargs": {"-n", "--max-args", "-L", "--max-lines", "-I", "-P", "--max-procs", "-s", "--max-chars",
+              "-d", "--delimiter", "-a", "--arg-file", "-E"},
+    "exec": {"-a"},
+    "caffeinate": {"-t", "-w"},
+}
 _OPERATORS = {";", "&&", "||", "|", "&", ";;", "|&", "(", ")"}
 
 
@@ -88,11 +103,15 @@ def _strip_prefixes(argv: List[str]) -> List[str]:
             continue
         base = os.path.basename(tok.lstrip("\\"))
         if base in _PREFIX_COMMANDS:
+            arg_flags = _WRAPPER_ARG_FLAGS.get(base, set())
             i += 1
             # skip the wrapper's own flags (and the argument of the ones that take one)
             while i < len(argv) and argv[i].startswith("-"):
-                takes_arg = argv[i] in ("-u", "-g", "-C", "-D", "-n", "-p", "-I", "-L")
-                i += 2 if takes_arg else 1
+                flag = argv[i]
+                if flag == "--":
+                    i += 1
+                    break
+                i += 2 if flag in arg_flags else 1
             continue
         break
     rest = argv[i:]
@@ -291,10 +310,10 @@ _LINE_RULES = [
     (re.compile(r":\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:"), "fork bomb", "apocalyptic",
      "A ghost that begets ghosts that beget ghosts, until the house itself chokes on the dead.",
      "Spawns processes endlessly until the machine freezes."),
-    (re.compile(r"\b(curl|wget)\b[^|]*\|\s*(sudo\s+)?(ba|z|da)?sh\b"), "curl | sh", "grave",
+    (re.compile(r"\b(curl|wget)\b[^|]*\|\s*(sudo\s+)?(ba|z|da)?sh\b", re.I), "curl | sh", "grave",
      "You invite a stranger's spirit into your parlour without first asking its name.",
      "Downloads a script and runs it immediately without letting you read it."),
-    (re.compile(r">\s*/dev/(sd[a-z]|nvme\d|disk\d|hd[a-z])"), "redirect onto a raw disk", "apocalyptic",
+    (re.compile(r">\s*/dev/(sd[a-z]|nvme\d|r?disk\d|hd[a-z]|x?vd[a-z])", re.I), "redirect onto a raw disk", "apocalyptic",
      "You pour ink over the very bones of the disk.",
      "Overwrites a raw block device, destroying its partition table and data."),
 ]

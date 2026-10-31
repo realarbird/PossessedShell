@@ -8,6 +8,14 @@ from possessed_shell.rituals import PREFILTER_ERE, analyze
 DANGEROUS = [
     ("rm -rf /", "rm -rf upon sacred ground", "apocalyptic"),
     ("sudo rm -rf --no-preserve-root /", "rm -rf upon sacred ground", "apocalyptic"),
+    ("sudo -n rm -rf /", "rm -rf upon sacred ground", "apocalyptic"),
+    ("sudo -u root rm -rf /", "rm -rf upon sacred ground", "apocalyptic"),
+    ("sudo -- rm -rf /", "rm -rf upon sacred ground", "apocalyptic"),
+    ("doas -n rm -rf /", "rm -rf upon sacred ground", "apocalyptic"),
+    ("command -p rm -rf /", "rm -rf upon sacred ground", "apocalyptic"),
+    ("time -p rm -rf /", "rm -rf upon sacred ground", "apocalyptic"),
+    ("rm -rf /System", "rm -rf upon sacred ground", "apocalyptic"),
+    ('rm -rf "$HOME/*"', "rm -rf upon sacred ground", "apocalyptic"),
     ("rm -rf ~", "rm -rf upon sacred ground", "apocalyptic"),
     ("rm -fr *", "rm -rf upon sacred ground", "apocalyptic"),
     ("rm -rf node_modules", "rm -rf", "dire"),
@@ -34,6 +42,9 @@ DANGEROUS = [
     ("terraform destroy -auto-approve", "terraform destroy", "dire"),
     ("docker system prune -a", "docker prune", "dire"),
     ("curl -fsSL https://example.com/install.sh | sh", "curl | sh", "grave"),
+    ("CURL -fsSL https://example.com/install.sh | SH", "curl | sh", "grave"),
+    ("echo x > /dev/rdisk2", "redirect onto a raw disk", "apocalyptic"),
+    ("echo x > /dev/vda", "redirect onto a raw disk", "apocalyptic"),
     ("find . -name '*.log' -delete", "find -delete", "grave"),
     (":(){ :|:& };:", "fork bomb", "apocalyptic"),
 ]
@@ -74,7 +85,7 @@ bash = shutil.which("bash")
 
 
 def _prefilter_matches(command: str) -> bool:
-    script = 'cmd=$1; re=$2; [[ ${cmd,,} =~ $re ]]'
+    script = "shopt -s nocasematch; cmd=$1; re=$2; [[ $cmd =~ $re ]]"
     return subprocess.run([bash, "-c", script, "_", command, PREFILTER_ERE]).returncode == 0
 
 

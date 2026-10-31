@@ -34,15 +34,30 @@ def should_haunt(failure: Failure, settings: Optional[Settings] = None) -> bool:
         return False
     if not failure.command.strip():
         return False
-    if failure.exit_code == 1 and (failure.name in _ANSWERS_WITH_ONE or _is_git_diff_answer(failure.command)):
+    if failure.exit_code == 1 and (failure.name in _ANSWERS_WITH_ONE or _is_git_answer(failure.command)):
         return False
     return True
 
 
-def _is_git_diff_answer(command: str) -> bool:
-    """`git diff --exit-code` / `--quiet` exit 1 to say "there are differences"."""
+_GIT_ARG_FLAGS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env"}
+
+
+def _is_git_answer(command: str) -> bool:
+    """`git diff --exit-code` / `--quiet` and `git grep` exit 1 as an answer ("differences" / "no match")."""
     argv = next(iter(rituals.split_commands(command)), [])
-    return argv[:2] == ["git", "diff"] and bool({"--exit-code", "--quiet"} & set(argv))
+    if not argv or argv[0] != "git":
+        return False
+    i = 1
+    while i < len(argv) and argv[i].startswith("-"):
+        i += 2 if argv[i] in _GIT_ARG_FLAGS else 1
+    if i >= len(argv):
+        return False
+    sub, rest = argv[i], argv[i + 1:]
+    if sub == "grep":
+        return True
+    if sub == "diff" and bool({"--exit-code", "--quiet"} & set(rest)):
+        return True
+    return False
 
 
 def _chat_span_data(reply: Dict[str, Any]) -> Dict[str, Any]:

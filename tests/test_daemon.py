@@ -1,8 +1,9 @@
+import argparse
 import asyncio
 import json
 import os
 
-from possessed_shell import client
+from possessed_shell import cli, client
 from possessed_shell.daemon import Daemon
 from possessed_shell.models import Failure
 from fakes import FakeBrain, FakeMemory
@@ -68,3 +69,31 @@ def test_omens_reach_live_sessions_and_bury_dead_ones(settings):
     assert daemon.deliver_omen({"kind": "cpu", "title": "fevered processors"}) == 1
     assert json.loads((live / "omen.json").read_text())["kind"] == "cpu"
     assert not dead.exists()
+
+
+def test_daemon_pid_rejects_unrelated_process(settings, monkeypatch):
+    settings.ensure_home()
+    settings.pid_path.write_text("424242")
+
+    class FakeProc:
+        def status(self):
+            return "running"
+
+        def cmdline(self):
+            return ["/usr/sbin/sshd", "-D"]
+
+        def name(self):
+            return "sshd"
+
+    monkeypatch.setattr(client.psutil, "Process", lambda pid: FakeProc())
+    assert client.daemon_pid(settings) is None
+
+
+def test_corrupted_omen_file_is_unlinked_cleanly(settings):
+    session = settings.session_dir(12345)
+    session.mkdir(parents=True)
+    omen_file = session / "omen.json"
+    omen_file.write_text("{corrupted-json")
+    rc = cli.cmd_omen(argparse.Namespace(demo=False, session="12345"), settings)
+    assert rc == 0
+    assert not omen_file.exists()

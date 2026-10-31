@@ -1,4 +1,4 @@
-# PossessedShell hook for bash (4.0+).  Load it as the LAST line of ~/.bashrc with:
+# PossessedShell hook for bash (3.2+, including macOS /bin/bash).  Load it as the LAST line of ~/.bashrc with:
 #     eval "$(possessed-shell init bash)"
 #
 # - DEBUG trap (preexec): remember each command; destructive ones are intercepted before they run.
@@ -8,8 +8,8 @@
 
 [[ $- == *i* ]] || return 0
 [[ -n ${__POSSESSED_LOADED:-} ]] && return 0
-if (( BASH_VERSINFO[0] < 4 )); then
-  echo "possessed-shell: bash ${BASH_VERSION} is too old to be haunted (need 4.0+); try zsh." >&2
+if (( BASH_VERSINFO[0] < 3 || (BASH_VERSINFO[0] == 3 && BASH_VERSINFO[1] < 2) )); then
+  echo "possessed-shell: bash ${BASH_VERSION} is too old to be haunted (need 3.2+); try zsh." >&2
   return 0
 fi
 __POSSESSED_LOADED=1
@@ -20,6 +20,7 @@ __POSSESSED_DIR="${POSSESSED_HOME:-$HOME/.possessed}/sessions/$$"
 __POSSESSED_ERR="$__POSSESSED_DIR/stderr.log"
 __POSSESSED_CMD=""
 __POSSESSED_START=""
+__POSSESSED_START_SEC=0
 __POSSESSED_AT_PROMPT=0
 __POSSESSED_BLOCKED=0
 __POSSESSED_HISTNUM=""
@@ -41,14 +42,16 @@ __possessed_prev_trap() {
   local prev
   prev=$(trap -p "$1")
   prev=${prev#trap -- \'}
-  prev=${prev%\' $1}
-  printf '%s' "${prev//\'\\\'\'/\'}"
+  prev=${prev%\' *}
+  prev=${prev//\'\\\'\'/\'}
+  while [[ $prev == *[\;[:space:]] ]]; do prev=${prev%?}; done
+  printf '%s' "$prev"
 }
 
 # The DEBUG trap. extdebug also turns on function tracing, so this fires inside functions and
 # command substitutions (PS1's included) too: anything that is not ours, at top level, is ignored.
 __possessed_preexec() {
-  [[ $BASHPID == "$$" ]] || return 0
+  (( BASH_SUBSHELL == 0 )) && [[ ${BASHPID:-$$} == "$$" ]] || return 0
   case $BASH_COMMAND in __possessed_*) return 0 ;; esac
   case ${FUNCNAME[1]:-} in __possessed_*) return 0 ;; esac
   if [[ $__POSSESSED_AT_PROMPT != 1 ]]; then
@@ -67,13 +70,21 @@ __possessed_preexec() {
   fi
   __POSSESSED_CMD=$cmd
   __POSSESSED_START=${EPOCHREALTIME:-}
+  __POSSESSED_START_SEC=$SECONDS
   [[ -f $__POSSESSED_ERR ]] && : >| "$__POSSESSED_ERR"
 
-  if [[ ${POSSESSED_RITUALS:-1} != 0 ]] && __possessed_awake && [[ ${cmd,,} =~ $__POSSESSED_RITUAL_RE ]]; then
-    "${__POSSESSED_BIN[@]}" ritual --session $$ --shell bash -- "$cmd" </dev/tty >/dev/tty 2>&1
-    if [[ $? == 66 ]]; then
-      __POSSESSED_BLOCKED=1
-      return 1
+  if [[ ${POSSESSED_RITUALS:-1} != 0 ]] && __possessed_awake; then
+    local _nocase=0 _matched=0
+    shopt -q nocasematch && _nocase=1
+    shopt -s nocasematch
+    [[ $cmd =~ $__POSSESSED_RITUAL_RE ]] && _matched=1
+    (( _nocase == 0 )) && shopt -u nocasematch
+    if (( _matched )); then
+      "${__POSSESSED_BIN[@]}" ritual --session $$ --shell bash -- "$cmd"
+      if [[ $? == 66 ]]; then
+        __POSSESSED_BLOCKED=1
+        return 1
+      fi
     fi
   fi
   return 0
@@ -81,13 +92,28 @@ __possessed_preexec() {
 
 __possessed_precmd() {
   local ec=$?
-  local cmd=$__POSSESSED_CMD blocked=$__POSSESSED_BLOCKED
+  local cmd=$__POSSESSED_CMD blocked=$__POSSESSED_BLOCKED line
   __POSSESSED_CMD=""
   __POSSESSED_BLOCKED=0
+  if [[ -z $cmd && $blocked != 1 ]]; then
+    # In bash 4+, pipeline elements run in subshells so preexec could not set __POSSESSED_CMD in the parent.
+    line=$(HISTTIMEFORMAT= builtin history 1)
+    if [[ $line =~ ^[[:space:]]*([0-9]+)[*]?[[:space:]]+(.*)$ ]] && [[ ${BASH_REMATCH[1]} != "$__POSSESSED_HISTNUM" ]]; then
+      __POSSESSED_HISTNUM=${BASH_REMATCH[1]}
+      cmd=${BASH_REMATCH[2]}
+    fi
+  fi
   if __possessed_awake && [[ -n $cmd && $blocked != 1 ]] && (( ec != 0 && ec != 130 && ec != 141 && ec != 148 )); then
+    local -a timing=()
+    if [[ -n $__POSSESSED_START ]]; then
+      timing=(--started "$__POSSESSED_START")
+    else
+      timing=(--duration "$(( SECONDS - __POSSESSED_START_SEC ))")
+    fi
     "${__POSSESSED_BIN[@]}" curse --session $$ --shell bash --exit-code "$ec" \
-      ${__POSSESSED_START:+--started "$__POSSESSED_START"} \
+      "${timing[@]}" \
       --stderr-file "$__POSSESSED_ERR" --cwd "$PWD" -- "$cmd"
+    [[ -f $__POSSESSED_ERR ]] && : >| "$__POSSESSED_ERR"
     if [[ -s $__POSSESSED_DIR/fix ]]; then
       # The ghost's remedy is placed in history: press Up to summon it. It never runs by itself.
       builtin history -s "$(<"$__POSSESSED_DIR/fix")"
@@ -102,6 +128,11 @@ __possessed_precmd() {
 
 # Runs at the very end of PROMPT_COMMAND: the next DEBUG trap belongs to a command the user typed.
 __possessed_arm() {
+  local line
+  line=$(HISTTIMEFORMAT= builtin history 1)
+  if [[ $line =~ ^[[:space:]]*([0-9]+)[*]?[[:space:]]+ ]]; then
+    __POSSESSED_HISTNUM=${BASH_REMATCH[1]}
+  fi
   __POSSESSED_AT_PROMPT=1
 }
 

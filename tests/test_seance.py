@@ -24,6 +24,10 @@ def test_should_haunt(settings):
     assert not should_haunt(Failure("sleep 100", 130), settings)  # Ctrl-C
     assert not should_haunt(Failure("git diff --exit-code", 1), settings)  # "there are differences"
     assert not should_haunt(Failure("git diff --quiet HEAD~1", 1), settings)
+    assert not should_haunt(Failure("git -C /tmp diff --quiet", 1), settings)
+    assert not should_haunt(Failure("git --no-pager diff --exit-code", 1), settings)
+    assert not should_haunt(Failure("git grep needle", 1), settings)
+    assert should_haunt(Failure("git grep --bogus-flag needle", 129), settings)
     assert should_haunt(Failure("git diff --exit-code nope..", 128), settings)
     assert should_haunt(Failure("git push", 1), settings)
     assert not should_haunt(Failure("ls", 0), settings)

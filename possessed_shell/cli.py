@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import termios
@@ -168,7 +169,7 @@ def cmd_ritual(args: argparse.Namespace, settings: config.Settings) -> int:
             render.say(console, "The circle is broken. The spirits rest, and so does your command.", f"italic {render.CYAN}")
         console.print()
     client.report_ritual(settings, command=command, name=ritual.name, severity=ritual.severity,
-                         decision=decision, shell=args.shell or "")
+                         decision=decision, shell=getattr(args, "shell", None) or "")
     return 0 if decision == "summoned" else config.RITUAL_BANISHED
 
 
@@ -189,9 +190,17 @@ def cmd_omen(args: argparse.Namespace, settings: config.Settings) -> int:
         return 0
     path = settings.session_dir(args.session) / "omen.json"
     try:
-        omen = json.loads(path.read_text())
-        path.unlink()
-    except (OSError, ValueError):
+        raw = path.read_text()
+    except OSError:
+        return 0
+    finally:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+    try:
+        omen = json.loads(raw)
+    except ValueError:
         return 0
     if settings.omens:
         try:
@@ -205,8 +214,12 @@ def cmd_omen(args: argparse.Namespace, settings: config.Settings) -> int:
 
 def _self_command() -> List[str]:
     argv0 = Path(sys.argv[0])
-    if argv0.name == "possessed-shell" and argv0.exists():
-        return [str(argv0.resolve())]
+    if argv0.name == "possessed-shell":
+        if argv0.exists():
+            return [str(argv0.resolve())]
+        found = shutil.which("possessed-shell")
+        if found:
+            return [str(Path(found).resolve())]
     return [sys.executable, "-m", "possessed_shell"]
 
 
@@ -248,7 +261,7 @@ def cmd_daemon(args: argparse.Namespace, settings: config.Settings) -> int:
     if not reply:
         console.print("[bold red]No ghost is haunting this machine.[/] Start one with: possessed-shell daemon start")
         return 1
-    console.print(f"Haunting since pid {reply['pid']} · model {reply['model']} · sentry "
+    console.print(f"Haunting (pid {reply['pid']}) · model {reply['model']} · sentry "
                   f"{'on' if reply.get('sentry') else 'off'} · backboard memory {'on' if reply.get('memory') else 'off'}")
     return 0
 
@@ -284,7 +297,14 @@ def cmd_doctor(args: argparse.Namespace, settings: config.Settings) -> int:
             import backboard  # noqa: F401
 
             memory = GhostMemory(settings)
-            assistant = asyncio.run(asyncio.wait_for(memory.assistant_id(), 15))
+
+            async def _check_memory() -> str:
+                try:
+                    return await asyncio.wait_for(memory.assistant_id(), 15)
+                finally:
+                    await memory.aclose()
+
+            assistant = asyncio.run(_check_memory())
             row(True, "Backboard memory", f"on (assistant {assistant[:8]}…)")
         except Exception as exc:
             row(False, "Backboard memory", f"BACKBOARD_API_KEY set but failed: {exc}")
@@ -329,6 +349,8 @@ def cmd_sins(args: argparse.Namespace, settings: config.Settings) -> int:
 def cmd_summon(args: argparse.Namespace, settings: config.Settings) -> int:
     """Run a command that is doomed to fail and let the ghost react, without any shell hook."""
     command = _command(args.command) or "ls /crypt/of/nothing"
+    if cmd_ritual(argparse.Namespace(command=[command], shell=Path(os.environ.get("SHELL") or "/bin/sh").name), settings) == config.RITUAL_BANISHED:
+        return config.RITUAL_BANISHED
     shell = os.environ.get("SHELL") or "/bin/sh"
     started = time.time()
     proc = subprocess.run([shell, "-c", command], stderr=subprocess.PIPE, text=True, errors="replace")
@@ -336,10 +358,11 @@ def cmd_summon(args: argparse.Namespace, settings: config.Settings) -> int:
     if proc.returncode == 0:
         Console().print("That command lived. Summon something doomed, e.g.  possessed-shell summon -- python3 -c 'import ectoplasm'")
         return 0
+    clean_stderr = _ANSI.sub("", proc.stderr).replace("\r\n", "\n").replace("\r", "\n")
     return haunt(settings, Failure(
         command=command,
         exit_code=proc.returncode,
-        stderr=proc.stderr[-STDERR_TAIL_BYTES:],
+        stderr=clean_stderr[-STDERR_TAIL_BYTES:],
         cwd=os.getcwd(),
         shell=Path(shell).name,
         duration=time.time() - started,

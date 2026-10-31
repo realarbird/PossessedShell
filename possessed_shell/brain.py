@@ -22,32 +22,51 @@ class BrainError(Exception):
     """Gemma is unreachable, too slow, or answered with something we cannot use."""
 
 
+_ANSI_AND_CTRL = re.compile(
+    r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-Za-z0-9]|[\x00-\x08\x0b-\x1f\x7f]"
+)
+
+
 def _extract_json(content: str) -> Dict:
-    content = content.strip()
-    content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content)
+    cleaned = re.sub(r"<think>[\s\S]*?</think>", "", content, flags=re.I).strip()
+    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned)
     try:
-        return json.loads(content)
+        return json.loads(cleaned)
     except json.JSONDecodeError:
-        m = re.search(r"\{.*\}", content, re.S)
-        if not m:
-            raise BrainError(f"no JSON in reply: {content[:120]!r}")
+        pass
+    decoder = json.JSONDecoder()
+    candidates: List[Dict] = []
+    idx = cleaned.find("{")
+    if idx < 0:
+        raise BrainError(f"no JSON in reply: {content[:120]!r}")
+    last_err: Optional[Exception] = None
+    while idx >= 0:
         try:
-            return json.loads(m.group(0))
+            obj, _ = decoder.raw_decode(cleaned, idx)
+            if isinstance(obj, dict):
+                if "lament" in obj:
+                    return obj
+                candidates.append(obj)
         except json.JSONDecodeError as exc:
-            raise BrainError(f"unparseable JSON in reply: {exc}") from exc
+            last_err = exc
+        idx = cleaned.find("{", idx + 1)
+    if candidates:
+        return candidates[-1]
+    raise BrainError(f"unparseable JSON in reply: {last_err}")
 
 
 def clean_fix(fix: str) -> str:
-    """Reduce whatever the model put in `fix` to a single runnable line, or ''."""
+    """Reduce whatever the model put in `fix` to a single safe, control-char-free runnable line, or ''."""
     if not fix:
         return ""
+    fix = _ANSI_AND_CTRL.sub("", fix.replace("\r\n", "\n").replace("\r", "\n"))
     fix = re.sub(r"^\s*```[\w-]*[ \t]*\n?|\n?```\s*$", "", fix.strip())
     fix = fix.strip().strip("`").strip()
     lines = [ln.strip() for ln in fix.splitlines() if ln.strip() and not ln.strip().startswith("#")]
     if not lines:
         return ""
     line = re.sub(r"^\$\s+", "", lines[0]).strip("`").strip()
-    if len(line) > 300 or line.lower() in ("none", "n/a", "null", '""'):
+    if len(line) > 300 or line.lower() in ("none", "n/a", "null", '""', "''"):
         return ""
     return line
 
@@ -169,4 +188,7 @@ class Brain:
         if wanted & set(names):
             return True, f"{s.model} is ready at {s.llm_url}"
         hint = f"run: ollama pull {s.model}" if s.llm_api == "ollama" else "load the model in your server"
+        available = [n for n in names if n][:3]
+        if available:
+            hint += f"; available: {', '.join(available)}"
         return False, f"{s.model} not found at {s.llm_url} ({hint})"

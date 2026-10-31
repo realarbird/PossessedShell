@@ -56,7 +56,7 @@ def run(sh, line, timeout=60):
 def test_failed_command_is_cursed_with_its_captured_stderr(shell):
     out = run(shell, "ls /crypt/of/nothing")
     assert "HAS DIED" in out
-    assert "exit 2" in out
+    assert re.search(r"exit [12]\b", out)  # GNU ls exits 2, BSD/macOS ls exits 1
     # The diagnosis comes from the captured stderr ("No such file or directory").
     assert "`/crypt/of/nothing` does not exist" in out
     assert "ls -la /" in out
@@ -69,7 +69,7 @@ def test_failed_command_is_cursed_with_its_captured_stderr(shell):
 
 
 def test_benign_failures_and_successes_are_left_in_peace(shell):
-    out = run(shell, "grep zzz-not-there /etc/hostname")
+    out = run(shell, "grep zzz-not-there /etc/hosts")
     assert "HAS DIED" not in out
     out = run(shell, "echo still-alive")
     assert "still-alive" in out and "HAS DIED" not in out
@@ -111,3 +111,34 @@ def test_omens_appear_at_the_next_prompt(shell, tmp_path):
     out = run(shell, "true")
     assert "ECTOPLASM LEAK: DROWNING MEMORY" in out
     assert not (session / "omen.json").exists()
+
+
+def test_bash_chains_existing_multiline_traps_cleanly(tmp_path):
+    if not shutil.which("bash"):
+        pytest.skip("bash not installed")
+    hook = tmp_path / "hook.bash"
+    hook.write_text(hook_script("bash"))
+    marker = tmp_path / "prior_trap_ran"
+    rc = tmp_path / ".bashrc"
+    rc.write_text(
+        "trap 'if true; then\n  :;\nfi;' DEBUG\n"
+        f"trap 'touch {marker}; ' EXIT\n"
+        f"PS1='{PROMPT}'\n"
+        f"source {hook}\n"
+    )
+    env = hooked_env(tmp_path, "bash")
+    sh = ShellPty(["bash", "--noprofile", "--rcfile", str(rc), "-i"], env, tmp_path)
+    try:
+        sh.expect(PROMPT)
+        out = run(sh, "echo trap-ok")
+        assert "trap-ok" in out
+        assert "syntax error" not in out
+        sh.sendline("exit")
+        for _ in range(50):
+            if marker.exists():
+                break
+            import time
+            time.sleep(0.05)
+        assert marker.exists()
+    finally:
+        sh.close()

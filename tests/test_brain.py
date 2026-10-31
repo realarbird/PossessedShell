@@ -4,6 +4,7 @@ import json
 import httpx
 import pytest
 
+from possessed_shell import config
 from possessed_shell.brain import Brain, BrainError, clean_fix, parse_reply
 from possessed_shell.prompts import GHOST_SYSTEM_PROMPT, HAUNTING_SCHEMA
 
@@ -14,6 +15,8 @@ def test_parse_reply_plain_and_fenced():
     assert parse_reply(json.dumps(REPLY)) == REPLY
     assert parse_reply("```json\n" + json.dumps(REPLY) + "\n```") == REPLY
     assert parse_reply("Here you go: " + json.dumps(REPLY) + " Farewell.") == REPLY
+    noisy = "<think>Try awk '{print $1}' or {bad: json}</think>Note {not json}: " + json.dumps(REPLY)
+    assert parse_reply(noisy) == REPLY
 
 
 def test_parse_reply_rejects_garbage():
@@ -28,6 +31,8 @@ def test_parse_reply_rejects_garbage():
     ("$ pip install x", "pip install x"),
     ("```bash\ngit pull --rebase\n```", "git pull --rebase"),
     ("# first\nmake build\nmake test", "make build"),
+    ("\x1b[32mls -la\x1b[0m\x07", "ls -la"),
+    ("git\x00 status\x7f", "git status"),
     ("none", ""),
     ("", ""),
 ])
@@ -99,6 +104,21 @@ def test_server_errors_become_brain_errors(settings):
 def test_status_reports_missing_model(settings):
     brain = _brain(settings, lambda r: httpx.Response(200, json={"models": [{"name": "llama3:8b"}]}))
     ok, msg = asyncio.run(brain.status())
-    assert not ok and "ollama pull gemma2:2b" in msg
+    assert not ok and "ollama pull gemma2:2b" in msg and "available: llama3:8b" in msg
     brain = _brain(settings, lambda r: httpx.Response(200, json={"models": [{"name": "gemma2:2b"}]}))
     assert asyncio.run(brain.status())[0]
+
+
+def test_ollama_host_url_normalization(monkeypatch):
+    monkeypatch.delenv("POSSESSED_LLM_URL", raising=False)
+    monkeypatch.setenv("OLLAMA_HOST", "127.0.0.1:11434")
+    assert config.load().llm_url == "http://127.0.0.1:11434"
+
+    monkeypatch.setenv("OLLAMA_HOST", "0.0.0.0:11434")
+    assert config.load().llm_url == "http://127.0.0.1:11434"
+
+    monkeypatch.setenv("OLLAMA_HOST", "localhost")
+    assert config.load().llm_url == "http://localhost:11434"
+
+    monkeypatch.setenv("POSSESSED_LLM_URL", "localhost:8080/v1/")
+    assert config.load().llm_url == "http://localhost:8080/v1"

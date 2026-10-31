@@ -115,7 +115,7 @@ export BACKBOARD_API_KEY="<your key>"                                 # let the 
 ```bash
 # zsh
 echo 'eval "$(possessed-shell init zsh)"' >> ~/.zshrc
-# bash (4.0+): must be the LAST line of ~/.bashrc
+# bash (3.2+, including macOS /bin/bash): must be the LAST line of ~/.bashrc
 echo 'eval "$(possessed-shell init bash)"' >> ~/.bashrc
 
 exec $SHELL                  # reload; the daemon wakes up in the background

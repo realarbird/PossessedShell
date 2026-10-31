@@ -10,6 +10,8 @@ def diagnose(command, code, stderr, cwd=""):
 
 def test_command_name_skips_wrappers():
     assert command_name("sudo -E FOO=1 python3 x.py | tee log") == "python3"
+    assert command_name("sudo -E python3 x.py | tee log") == "python3"
+    assert command_name("sudo -n -u root python3 x.py") == "python3"
     assert command_name("FOO=bar /usr/bin/git status") == "git"
 
 
@@ -18,6 +20,8 @@ def test_typo_in_command_name():
     assert fix == "git status"
     _, fix = diagnose("sl -la", 127, "zsh: command not found: sl")
     assert fix == "ls -la"
+    _, fix = diagnose("cd /Users/gianni && gi status", 127, "zsh: command not found: gi")
+    assert fix == "cd /Users/gianni && git status"
 
 
 def test_missing_program_suggests_install(monkeypatch):
@@ -76,3 +80,19 @@ def test_remedy_mourns_repeat_sins():
     assert haunting.source == "remedy"
     assert haunting.past_sins == ["before"]
     assert "gti" in haunting.lament
+
+
+def test_command_not_found_avoids_false_positives():
+    diagnosis, fix = diagnose("curl https://api.example/item", 1, "Error: item: not found")
+    assert fix == ""
+    assert "not installed" not in diagnosis
+    diagnosis, fix = diagnose("./broken.sh", 127, "bash: ./broken.sh: /bin/nope: bad interpreter: No such file or directory")
+    assert "install" not in fix
+
+
+def test_node_git_identity_and_manifest_remedies():
+    assert diagnose("node index.js", 1, "Error: Cannot find module 'express'")[1] == "npm install express"
+    assert diagnose("node index.js", 1, "Error: Cannot find module '@octokit/rest/plugin'")[1] == "npm install @octokit/rest"
+    assert "git config --global" in diagnose("git commit -m x", 128, "Author identity unknown\n*** Please tell me who you are.")[1]
+    assert diagnose("cargo build", 101, "error: could not find `Cargo.toml` in `/tmp` or any parent directory")[1] == "cargo init"
+    assert diagnose("go build", 1, "go: go.mod file not found in current directory or any parent directory")[1] == "go mod init <module>"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import platform
 import random
 import shutil
 import time
@@ -17,7 +18,10 @@ from possessed_shell.config import Settings
 def _top_process() -> Optional[Dict]:
     top = None
     for proc in psutil.process_iter(["pid", "name", "memory_percent"]):
-        info = proc.info
+        try:
+            info = proc.info
+        except psutil.Error:
+            continue
         if info.get("memory_percent") is None:
             continue
         if top is None or info["memory_percent"] > top["memory_percent"]:
@@ -101,6 +105,8 @@ class EctoplasmMonitor:
         self.clock = clock
         self.streak = {"cpu": 0, "memory": 0, "process": 0}
         self.last_omen: Dict[str, float] = {}
+        if read is read_vitals:
+            psutil.cpu_percent(interval=None)  # prime psutil's non-blocking CPU delta
 
     def _ready(self, kind: str, hot: bool) -> bool:
         self.streak[kind] = self.streak[kind] + 1 if hot else 0
@@ -123,7 +129,7 @@ class EctoplasmMonitor:
                 "kind": "cpu", "title": "fevered processors",
                 "message": random.choice(_CPU_OMENS).format(value=r.cpu, name=top["name"]),
                 "detail": f"CPU at {r.cpu:.0f}% for {self.SUSTAINED} readings in a row.",
-                "fix": "ps -eo pid,pcpu,comm --sort=-pcpu | head -5" if os.uname().sysname == "Linux" else "top -o cpu",
+                "fix": "ps -eo pid,pcpu,comm --sort=-pcpu | head -5" if platform.system() == "Linux" else "top -o cpu",
                 "value": r.cpu,
             })
         if self._ready("memory", r.mem >= s.mem_threshold):
@@ -131,7 +137,7 @@ class EctoplasmMonitor:
                 "kind": "memory", "title": "drowning memory",
                 "message": random.choice(_MEM_OMENS).format(value=r.mem, name=top["name"]),
                 "detail": f"RAM at {r.mem:.0f}%; hungriest process is {top['name']} (pid {top['pid']}).",
-                "fix": "ps -eo pid,pmem,comm --sort=-pmem | head -5" if os.uname().sysname == "Linux" else "top -o mem",
+                "fix": "ps -eo pid,pmem,comm --sort=-pmem | head -5" if platform.system() == "Linux" else "top -o mem",
                 "value": r.mem,
             })
         proc_mem = float(top.get("memory_percent") or 0.0)

@@ -11,6 +11,8 @@ import subprocess
 import sys
 from typing import Any, Dict, Optional
 
+import psutil
+
 from possessed_shell import telemetry
 from possessed_shell.config import Settings
 from possessed_shell.models import Failure, Haunting
@@ -38,9 +40,19 @@ def request(settings: Settings, msg: Dict[str, Any], timeout: float) -> Optional
 def daemon_pid(settings: Settings) -> Optional[int]:
     try:
         pid = int(settings.pid_path.read_text().strip())
-        os.kill(pid, 0)
+        if pid == os.getpid():
+            return pid
+        proc = psutil.Process(pid)
+        if proc.status() == psutil.STATUS_ZOMBIE:
+            return None
+        cmdline = " ".join(proc.cmdline())
+        name = proc.name()
+        if cmdline and "possessed_shell" not in cmdline and "possessed-shell" not in cmdline and "pytest" not in cmdline:
+            return None
+        if not cmdline and "python" not in name.lower() and "possessed" not in name.lower():
+            return None
         return pid
-    except (OSError, ValueError):
+    except (OSError, ValueError, psutil.Error):
         return None
 
 
@@ -49,11 +61,12 @@ def start_daemon(settings: Settings) -> bool:
     if daemon_pid(settings) and request(settings, {"type": "ping"}, 1.0):
         return False
     settings.ensure_home()
-    log = open(settings.log_path, "ab")
-    subprocess.Popen(
-        [sys.executable, "-m", "possessed_shell", "daemon", "run"],
-        stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True, close_fds=True,
-    )
+    log_fd = os.open(str(settings.log_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(log_fd, "ab") as log:
+        subprocess.Popen(
+            [sys.executable, "-m", "possessed_shell", "daemon", "run"],
+            stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True, close_fds=True,
+        )
     return True
 
 

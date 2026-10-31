@@ -81,7 +81,7 @@ if [[ ${POSSESSED_RITUALS:-1} != 0 ]]; then
     emulate -L zsh
     if __possessed_awake && [[ ${(L)BUFFER} =~ $__POSSESSED_RITUAL_RE ]]; then
       zle -I
-      "${__POSSESSED_BIN[@]}" ritual --session $$ --shell zsh -- "$BUFFER" </dev/tty >/dev/tty 2>&1
+      "${__POSSESSED_BIN[@]}" ritual --session $$ --shell zsh -- "$BUFFER"
       if (( $? == 66 )); then
         # Banished: the command stays on the line, unrun, for you to reconsider.
         zle reset-prompt

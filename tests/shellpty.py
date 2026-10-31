@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import codecs
 import os
+import platform
 import pty
 import re
 import select
-import signal
+import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -17,19 +20,39 @@ _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07|\x1b[()][A-Za-
 PROMPT = "HAUNTED> "
 
 
+_SPAWN_CTTY = (
+    "import fcntl, os, sys, termios; "
+    "os.setsid(); "
+    "fcntl.ioctl(0, termios.TIOCSCTTY, 0); "
+    "os.execvp(sys.argv[1], sys.argv[1:])"
+)
+
+
 class ShellPty:
     def __init__(self, argv: List[str], env: Dict[str, str], cwd: Path):
-        self.pid, self.fd = pty.fork()
-        if self.pid == 0:  # child
-            os.chdir(cwd)
-            os.execvpe(argv[0], argv, env)
+        master, slave = pty.openpty()
+        try:
+            self._proc = subprocess.Popen(
+                [sys.executable, "-c", _SPAWN_CTTY, *argv],
+                stdin=slave,
+                stdout=slave,
+                stderr=slave,
+                cwd=str(cwd),
+                env=env,
+                close_fds=True,
+            )
+        finally:
+            os.close(slave)
+        self.pid = self._proc.pid
+        self.fd = master
+        self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self.buffer = ""
 
     def _pump(self, timeout: float) -> None:
         ready, _, _ = select.select([self.fd], [], [], timeout)
         if ready:
             try:
-                data = os.read(self.fd, 65536).decode("utf-8", errors="replace")
+                data = self._decoder.decode(os.read(self.fd, 65536))
             except OSError:
                 return
             self.buffer += data
@@ -56,18 +79,23 @@ class ShellPty:
 
     def close(self) -> None:
         try:
-            os.kill(self.pid, signal.SIGKILL)
-            os.waitpid(self.pid, 0)
+            self._proc.kill()
+            self._proc.wait(timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        try:
+            os.close(self.fd)
         except OSError:
             pass
-        os.close(self.fd)
 
 
 def hooked_env(tmp: Path, shell: str) -> Dict[str, str]:
     venv_bin = str(Path(sys.executable).parent)
+    shell_path = shutil.which(shell) or f"/bin/{shell}"
+    lang = "en_US.UTF-8" if platform.system() == "Darwin" else "C.UTF-8"
     return {
         "HOME": str(tmp),
-        "PATH": f"{venv_bin}:/usr/local/bin:/usr/bin:/bin",
+        "PATH": f"{venv_bin}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
         "TERM": "dumb",
         "POSSESSED_HOME": str(tmp / ".possessed"),
         "POSSESSED_NO_ANIMATION": "1",
@@ -75,6 +103,8 @@ def hooked_env(tmp: Path, shell: str) -> Dict[str, str]:
         "POSSESSED_LLM_URL": "http://127.0.0.1:9",  # no Gemma: the offline grimoire answers
         "POSSESSED_LLM_TIMEOUT": "2",
         "HISTFILE": "/dev/null",
-        "LANG": "C.UTF-8",
-        "SHELL": f"/bin/{shell}",
+        "BASH_SILENCE_DEPRECATION_WARNING": "1",
+        "LANG": lang,
+        "LC_ALL": lang,
+        "SHELL": shell_path,
     }
